@@ -1,1 +1,902 @@
 
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#ffffff" />
+  <title>Generating Flowers</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      overflow: hidden;
+      padding: 0;
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      height: 100dvh;
+      touch-action: manipulation;
+    }
+
+    .container {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      height: 100dvh;
+      display: flex;
+      flex-direction: column-reverse;
+      align-items: flex-start;
+    }
+
+    .clean-btn {
+      z-index: 2;
+      position: absolute;
+      bottom: max(12px, env(safe-area-inset-bottom));
+      left: 15px;
+      font-family: sans-serif;
+      font-size: 13px;
+      color: white;
+      text-shadow: 0 0 10px #000000;
+      user-select: none;
+      padding: 10px;
+      cursor: pointer;
+      text-decoration: underline;
+      opacity: 0.5;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      display: block;
+      width: 100%;
+      height: 100%;
+      touch-action: none;
+    }
+
+    .name {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      width: 100%;
+      padding: 0 15px;
+      transform: translate(-50%, -50%);
+      color: white;
+      text-align: center;
+      font-family: sans-serif;
+      font-size: clamp(19px, 5vw, 45px);
+      text-shadow: 0 0 5px #000000;
+      user-select: none;
+      pointer-events: none;
+    }
+
+    @media (min-width: 640px) {
+      .name {
+        font-size: 45px;
+      }
+
+      .clean-btn {
+        font-size: 15px;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <canvas id="canvas"></canvas>
+    <div class="clean-btn">clean the screen</div>
+  </div>
+
+  <div class="name">Click To Add Flowers</div>
+
+  <script type="x-shader/x-fragment" id="fragmentShader">
+    #define PI 3.14159265359
+
+    uniform float u_ratio;
+    uniform vec2 u_cursor;
+    uniform float u_stop_time;
+    uniform float u_clean;
+    uniform vec2 u_stop_randomizer;
+
+    uniform sampler2D u_texture;
+    varying vec2 vUv;
+
+    // --------------------------------
+    // 2D noise
+
+    vec3 mod289(vec3 x) {
+      return x - floor(x * (1.0 / 289.0)) * 289.0;
+    }
+
+    vec2 mod289(vec2 x) {
+      return x - floor(x * (1.0 / 289.0)) * 289.0;
+    }
+
+    vec3 permute(vec3 x) {
+      return mod289(((x * 34.0) + 1.0) * x);
+    }
+
+    float snoise(vec2 v) {
+      const vec4 C = vec4(
+        0.211324865405187,
+        0.366025403784439,
+        -0.577350269189626,
+        0.024390243902439
+      );
+
+      vec2 i = floor(v + dot(v, C.yy));
+      vec2 x0 = v - i + dot(i, C.xx);
+
+      vec2 i1;
+      i1 = (x0.x > x0.y)
+        ? vec2(1.0, 0.0)
+        : vec2(0.0, 1.0);
+
+      vec4 x12 = x0.xyxy + C.xxzz;
+      x12.xy -= i1;
+
+      i = mod289(i);
+
+      vec3 p = permute(
+        permute(i.y + vec3(0.0, i1.y, 1.0))
+        + i.x + vec3(0.0, i1.x, 1.0)
+      );
+
+      vec3 m = max(
+        0.5 - vec3(
+          dot(x0, x0),
+          dot(x12.xy, x12.xy),
+          dot(x12.zw, x12.zw)
+        ),
+        0.0
+      );
+
+      m = m * m;
+      m = m * m;
+
+      vec3 x = 2.0 * fract(p * C.www) - 1.0;
+      vec3 h = abs(x) - 0.5;
+      vec3 ox = floor(x + 0.5);
+      vec3 a0 = x - ox;
+
+      m *= 1.79284291400159 -
+        0.85373472095314 * (a0 * a0 + h * h);
+
+      vec3 g;
+
+      g.x = a0.x * x0.x + h.x * x0.y;
+      g.yz = a0.yz * x12.xz + h.yz * x12.yw;
+
+      return 130.0 * dot(m, g);
+    }
+
+    // --------------------------------
+    // Ellipse shape for rounded tulip petals
+
+    float ellipsePetal(
+      vec2 p,
+      vec2 center,
+      vec2 radii
+    ) {
+      float d = length((p - center) / radii);
+
+      return 1.0 - smoothstep(0.88, 1.08, d);
+    }
+
+    // --------------------------------
+    // PINK TULIP
+    // Three overlapping rounded petals
+    // with a curved cup-shaped base
+
+    float get_tulip(vec2 p) {
+
+      float centerPetal = ellipsePetal(
+        p,
+        vec2(0.0, 0.23),
+        vec2(0.43, 0.70)
+      );
+
+      float leftPetal = ellipsePetal(
+        p,
+        vec2(-0.34, 0.06),
+        vec2(0.39, 0.57)
+      );
+
+      float rightPetal = ellipsePetal(
+        p,
+        vec2(0.34, 0.06),
+        vec2(0.39, 0.57)
+      );
+
+      float bottomCup = ellipsePetal(
+        p,
+        vec2(0.0, -0.17),
+        vec2(0.62, 0.45)
+      );
+
+      float flower = max(
+        max(centerPetal, leftPetal),
+        max(rightPetal, bottomCup)
+      );
+
+      // Small natural indentation between the petals
+      float notchLeft = ellipsePetal(
+        p,
+        vec2(-0.17, 0.68),
+        vec2(0.075, 0.15)
+      );
+
+      float notchRight = ellipsePetal(
+        p,
+        vec2(0.17, 0.68),
+        vec2(0.075, 0.15)
+      );
+
+      flower *= 1.0 - 0.55 * max(notchLeft, notchRight);
+
+      return flower;
+    }
+
+    // --------------------------------
+    // PINK LILY
+    // Six long pointed petals arranged
+    // in a radial star formation
+
+    float get_lily(vec2 p) {
+
+      float flower = 0.0;
+
+      for (int i = 0; i < 6; i++) {
+
+        float angle = float(i) * PI / 3.0;
+
+        // Rotate each petal in a different direction
+        vec2 q = vec2(
+          p.x * cos(angle) + p.y * sin(angle),
+          -p.x * sin(angle) + p.y * cos(angle)
+        );
+
+        // Petal length
+        float t = clamp(q.x / 0.78, 0.0, 1.0);
+
+        // Narrow tips and wider middle sections
+        float width = 0.27 *
+          pow(max(0.0, sin(PI * t)), 0.72);
+
+        float sideShape = 1.0 - smoothstep(
+          width - 0.025,
+          width + 0.025,
+          abs(q.y)
+        );
+
+        float startShape = smoothstep(
+          -0.04,
+          0.035,
+          q.x
+        );
+
+        float tipShape = 1.0 - smoothstep(
+          0.70,
+          0.80,
+          q.x
+        );
+
+        float petal = sideShape * startShape * tipShape;
+
+        flower = max(flower, petal);
+      }
+
+      // Small center connecting all six petals
+      float center = 1.0 - smoothstep(
+        0.10,
+        0.19,
+        length(p)
+      );
+
+      flower = max(flower, center);
+
+      return flower;
+    }
+
+    // --------------------------------
+    // Choose which flower to draw
+
+    float get_flower_shape(
+      vec2 _p,
+      float _pet_n,
+      float _angle,
+      float _outline
+    ) {
+
+      float size = 0.075 +
+        u_stop_randomizer[0] * 0.035;
+
+      // Normalize coordinates
+      vec2 p = _p / (size * _outline);
+
+      // Rotate the flower slightly
+      float rotation = _angle * 3.0;
+
+      p = vec2(
+        p.x * cos(rotation) - p.y * sin(rotation),
+        p.x * sin(rotation) + p.y * cos(rotation)
+      );
+
+      // Randomly choose tulip or lily
+      // The flower type stays consistent during growth
+      float isLily = step(
+        0.5,
+        u_stop_randomizer[1]
+      );
+
+      float tulip = get_tulip(p);
+      float lily = get_lily(p);
+
+      float flower = mix(
+        tulip,
+        lily,
+        isLily
+      );
+
+      // Growing animation
+      float grow_time = step(
+        0.25,
+        u_stop_time
+      ) * pow(u_stop_time, 0.3);
+
+      flower *= 1.0 - smoothstep(
+        grow_time,
+        grow_time + 0.08,
+        length(p) * 0.5
+      );
+
+      flower *= step(1e-4, grow_time);
+      flower *= 1.0 - step(1.0, grow_time);
+
+      return flower;
+    }
+
+    // --------------------------------
+    // Lily stamens
+
+    float segmentDistance(
+      vec2 p,
+      vec2 a,
+      vec2 b
+    ) {
+      vec2 pa = p - a;
+      vec2 ba = b - a;
+
+      float h = clamp(
+        dot(pa, ba) / dot(ba, ba),
+        0.0,
+        1.0
+      );
+
+      return length(pa - ba * h);
+    }
+
+    float get_lily_stamens(vec2 cursor) {
+
+      float size = 0.075 +
+        u_stop_randomizer[0] * 0.035;
+
+      vec2 p = cursor / size;
+
+      float stamens = 0.0;
+
+      // Three visible central filaments
+      for (int i = 0; i < 3; i++) {
+
+        float x = (float(i) - 1.0) * 0.10;
+
+        vec2 start = vec2(
+          x * 0.25,
+          -0.015
+        );
+
+        vec2 end = vec2(
+          x * 1.65,
+          0.39 + float(i % 2) * 0.08
+        );
+
+        float d = segmentDistance(
+          p,
+          start,
+          end
+        );
+
+        float line = 1.0 - smoothstep(
+          0.018,
+          0.038,
+          d
+        );
+
+        stamens = max(stamens, line);
+
+        // Anther at the end of each filament
+        float anther = 1.0 - smoothstep(
+          0.045,
+          0.075,
+          length(p - end)
+        );
+
+        stamens = max(stamens, anther);
+      }
+
+      return stamens;
+    }
+
+    // --------------------------------
+    // Stem
+
+    float get_stem_shape(
+      vec2 _p,
+      vec2 _uv,
+      float _w,
+      float _angle
+    ) {
+
+      _w = max(.004, _w);
+
+      float x_offset = _p.y * sin(_angle);
+      x_offset *= pow(3. * _uv.y, 2.);
+      _p.x -= x_offset;
+
+      float noise_power = .5;
+
+      float cursor_horizontal_noise =
+        noise_power *
+        snoise(2. * _uv * u_stop_randomizer[0]);
+
+      cursor_horizontal_noise *=
+        pow(dot(_p.y, _p.y), .6);
+
+      cursor_horizontal_noise *=
+        pow(dot(_uv.y, _uv.y), .3);
+
+      _p.x += cursor_horizontal_noise;
+
+      float left = smoothstep(-_w, 0., _p.x);
+      float right = 1. - smoothstep(0., _w, _p.x);
+
+      float stem_shape = left * right;
+
+      float grow_time = 1. - smoothstep(
+        0.,
+        .2,
+        u_stop_time
+      );
+
+      float stem_top_mask = smoothstep(
+        0.,
+        pow(grow_time, .5),
+        .03 - _p.y
+      );
+
+      stem_shape *= stem_top_mask;
+
+      stem_shape *= (1. - step(.17, u_stop_time));
+
+      return stem_shape;
+    }
+
+    // --------------------------------
+    // Main
+
+    void main() {
+
+      vec3 base = texture2D(
+        u_texture,
+        vUv
+      ).xyz;
+
+      vec2 uv = vUv;
+      uv.x *= u_ratio;
+
+      vec2 cursor = vUv - u_cursor.xy;
+      cursor.x *= u_ratio;
+
+      // Green stems
+      vec3 stem_color = vec3(
+        .1 + u_stop_randomizer[0] * .6,
+        .6,
+        .2
+      );
+
+      // Different pink shades
+      vec3 flower_color = mix(
+        vec3(1.0, 0.12, 0.42),
+        vec3(1.0, 0.48, 0.68),
+        u_stop_randomizer[0]
+      );
+
+      float angle = .5 *
+        (u_stop_randomizer[0] - .5);
+
+      // Stem
+      float stem_shape = get_stem_shape(
+        cursor,
+        uv,
+        .003,
+        angle
+      );
+
+      stem_shape += get_stem_shape(
+        cursor + vec2(
+          0.,
+          .2 + .5 * u_stop_randomizer[0]
+        ),
+        uv,
+        .003,
+        angle
+      );
+
+      float stem_mask = 1. -
+        get_stem_shape(
+          cursor,
+          uv,
+          .004,
+          angle
+        );
+
+      stem_mask -= get_stem_shape(
+        cursor + vec2(
+          0.,
+          .2 + .5 * u_stop_randomizer[0]
+        ),
+        uv,
+        .004,
+        angle
+      );
+
+      // Back petals
+      float petals_back_number =
+        1. + floor(u_stop_randomizer[0] * 2.);
+
+      float angle_offset =
+        -(2. * step(0., angle) - 1.) *
+        .1 * u_stop_time;
+
+      float flower_back_shape = get_flower_shape(
+        cursor,
+        petals_back_number,
+        angle + angle_offset,
+        1.5
+      );
+
+      float flower_back_mask = 1. -
+        get_flower_shape(
+          cursor,
+          petals_back_number,
+          angle + angle_offset,
+          1.6
+        );
+
+      // Front petals
+      float petals_front_number =
+        2. + floor(u_stop_randomizer[1] * 2.);
+
+      float flower_front_shape = get_flower_shape(
+        cursor,
+        petals_front_number,
+        angle,
+        1.0
+      );
+
+      float flower_front_mask = 1. -
+        get_flower_shape(
+          cursor,
+          petals_front_number,
+          angle,
+          .95
+        );
+
+      // Determine if the flower is a lily
+      float isLily = step(
+        0.5,
+        u_stop_randomizer[1]
+      );
+
+      vec3 color = base;
+
+      color *= stem_mask;
+      color *= flower_back_mask;
+      color *= flower_front_mask;
+
+      color += stem_shape * stem_color;
+
+      // Back petals
+      color += flower_back_shape *
+        (flower_color + vec3(.12, .12, .12));
+
+      // Front petals
+      color += flower_front_shape * flower_color;
+
+      // Lily stamens
+      float stamens = get_lily_stamens(cursor);
+
+      // Only appear on lilies
+      stamens *= isLily;
+
+      // Keep the stamens inside the flower
+      stamens *= flower_front_shape;
+
+      vec3 stamen_color = vec3(
+        1.0,
+        0.72,
+        0.20
+      );
+
+      color += stamens * stamen_color;
+
+      color.r *= 1. -
+        (.5 * flower_back_shape * flower_front_shape);
+
+      color.b *= 1. -
+        (flower_back_shape * flower_front_shape);
+
+      color *= u_clean;
+
+      gl_FragColor = vec4(color, 1.0);
+    }
+  </script>
+
+  <script type="x-shader/x-vertex" id="vertexShader">
+    varying vec2 vUv;
+
+    void main() {
+      vUv = uv;
+      gl_Position = vec4(position, 1.);
+    }
+  </script>
+
+  <script type="module">
+    import * as THREE from
+      "https://esm.sh/three@0.133.1/build/three.module";
+
+    const canvasEl = document.querySelector("#canvas");
+    const cleanBtn = document.querySelector(".clean-btn");
+
+    const pointer = {
+      x: 0.66,
+      y: 0.3,
+      clicked: true,
+    };
+
+    // Initial flower animation
+    window.setTimeout(() => {
+      pointer.x = 0.75;
+      pointer.y = 0.5;
+      pointer.clicked = true;
+    }, 700);
+
+    let basicMaterial, shaderMaterial;
+
+    let renderer = new THREE.WebGLRenderer({
+      canvas: canvasEl,
+      alpha: true,
+    });
+
+    let sceneShader = new THREE.Scene();
+    let sceneBasic = new THREE.Scene();
+
+    let camera = new THREE.OrthographicCamera(
+      -1, 1, 1, -1, 0, 10
+    );
+
+    let clock = new THREE.Clock();
+
+    let renderTargets = [
+      new THREE.WebGLRenderTarget(1, 1),
+      new THREE.WebGLRenderTarget(1, 1),
+    ];
+
+    createPlane();
+    updateSize();
+
+    window.addEventListener("resize", () => {
+      updateSize();
+      cleanCanvas();
+    });
+
+    render();
+
+    let isTouchScreen = false;
+
+    window.addEventListener("click", (e) => {
+      if (!isTouchScreen) {
+        pointer.x = e.pageX / window.innerWidth;
+        pointer.y = e.pageY / window.innerHeight;
+        pointer.clicked = true;
+      }
+    });
+
+    window.addEventListener("touchstart", (e) => {
+      isTouchScreen = true;
+
+      pointer.x =
+        e.targetTouches[0].pageX / window.innerWidth;
+
+      pointer.y =
+        e.targetTouches[0].pageY / window.innerHeight;
+
+      pointer.clicked = true;
+    }, { passive: true });
+
+    cleanBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      cleanCanvas();
+    });
+
+    cleanBtn.addEventListener("touchstart", (e) => {
+      e.stopPropagation();
+    }, { passive: true });
+
+    function cleanCanvas() {
+      pointer.vanishCanvas = true;
+
+      setTimeout(() => {
+        pointer.vanishCanvas = false;
+      }, 50);
+    }
+
+    function createPlane() {
+
+      shaderMaterial = new THREE.ShaderMaterial({
+
+        uniforms: {
+
+          u_stop_time: {
+            type: "f",
+            value: 0
+          },
+
+          u_stop_randomizer: {
+            type: "v2",
+            value: new THREE.Vector2(
+              Math.random(),
+              Math.random()
+            ),
+          },
+
+          u_cursor: {
+            type: "v2",
+            value: new THREE.Vector2(
+              pointer.x,
+              pointer.y
+            ),
+          },
+
+          u_ratio: {
+            type: "f",
+            value:
+              window.innerWidth / window.innerHeight,
+          },
+
+          u_texture: {
+            type: "t",
+            value: null
+          },
+
+          u_clean: {
+            type: "f",
+            value: 1
+          },
+
+        },
+
+        vertexShader:
+          document.getElementById("vertexShader").textContent,
+
+        fragmentShader:
+          document.getElementById("fragmentShader").textContent,
+
+      });
+
+      basicMaterial = new THREE.MeshBasicMaterial();
+
+      const planeGeometry = new THREE.PlaneGeometry(2, 2);
+
+      const planeBasic = new THREE.Mesh(
+        planeGeometry,
+        basicMaterial
+      );
+
+      const planeShader = new THREE.Mesh(
+        planeGeometry,
+        shaderMaterial
+      );
+
+      sceneBasic.add(planeBasic);
+      sceneShader.add(planeShader);
+    }
+
+    function render() {
+
+      shaderMaterial.uniforms.u_clean.value =
+        pointer.vanishCanvas ? 0 : 1;
+
+      shaderMaterial.uniforms.u_texture.value =
+        renderTargets[0].texture;
+
+      if (pointer.clicked) {
+
+        shaderMaterial.uniforms.u_cursor.value =
+          new THREE.Vector2(
+            pointer.x,
+            1 - pointer.y
+          );
+
+        shaderMaterial.uniforms.u_stop_randomizer.value =
+          new THREE.Vector2(
+            Math.random(),
+            Math.random()
+          );
+
+        shaderMaterial.uniforms.u_stop_time.value = 0;
+
+        pointer.clicked = false;
+      }
+
+      shaderMaterial.uniforms.u_stop_time.value +=
+        clock.getDelta();
+
+      renderer.setRenderTarget(renderTargets[1]);
+
+      renderer.render(sceneShader, camera);
+
+      basicMaterial.map = renderTargets[1].texture;
+
+      renderer.setRenderTarget(null);
+
+      renderer.render(sceneBasic, camera);
+
+      let tmp = renderTargets[0];
+
+      renderTargets[0] = renderTargets[1];
+      renderTargets[1] = tmp;
+
+      requestAnimationFrame(render);
+    }
+
+    function updateSize() {
+
+      shaderMaterial.uniforms.u_ratio.value =
+        window.innerWidth / window.innerHeight;
+
+      renderer.setPixelRatio(
+        Math.min(window.devicePixelRatio, 2)
+      );
+
+      renderer.setSize(
+        window.innerWidth,
+        window.innerHeight
+      );
+
+      const pixelRatio = renderer.getPixelRatio();
+
+      const width = Math.round(
+        window.innerWidth * pixelRatio
+      );
+
+      const height = Math.round(
+        window.innerHeight * pixelRatio
+      );
+
+      renderTargets[0].setSize(width, height);
+      renderTargets[1].setSize(width, height);
+    }
+
+  </script>
+</body>
+</html>
+
